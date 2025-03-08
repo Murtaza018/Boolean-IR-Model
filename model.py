@@ -2,6 +2,7 @@ import nltk
 from nltk.stem import PorterStemmer
 import string
 import re
+import math
 
 #initialize the porter stemmer
 stemmer = PorterStemmer()
@@ -25,18 +26,25 @@ def preprocess_word(word):
     return stemmed_word
 
 def createIndex(stopWords):
-    print(stopWords)
     index={}
     i=1
     while True:
-        print("i:",i)
         filename=str(i)+".txt"
         try:
             with open("Abstracts/" + filename,"r") as file:
-                print(filename + " Found!")
-                words=file.read().split()
+
+                text=file.read()
+                words = []
+                for word in re.split(r'[,\s/]+', text):  # Split by whitespace first
+                    if '-' in word:
+                        parts = word.split('-')
+                        words.append(word.replace('-', ''))  # Combined word
+                        words.extend(parts)  # Separate parts
+                    else:
+                        words.append(word)
                 for j in range(len(words)):
                     stemmed_word=preprocess_word(words[j])
+                    
                     if stemmed_word not in stopWords:
                         if stemmed_word not in index:
                             index[stemmed_word]={}
@@ -50,11 +58,9 @@ def createIndex(stopWords):
                                 index[stemmed_word][i].append(j)  
                                 
         except FileNotFoundError:
-            print(filename + " Not Found!")
-            #break
+            break
         i+=1
-        if(i>=3):
-            break    
+           
     return index    
 
 def validateQuery(query):
@@ -144,21 +150,169 @@ def validateQuery(query):
     # If all checks pass, the query is valid
     return True
 
-def getDocumentList(abc):
+def getTotalDocumentList(abc):
     doc_list = []
     for inner in abc:
         for key in inner.keys():
             if key not in doc_list:
                 doc_list.append(key)
     return doc_list
+def getDocumentPostings(index,stemmed_word):
+    if stemmed_word in index:
+        return index[stemmed_word]
+    return []    
+def spaceBetweenListings(list1,list2,space):
+    l1=list(list1.keys())
+    l2=list(list2.keys())
+    
+    i=0
+    j=0
+    skip1=math.floor(math.sqrt(len(l1)))
+    skip2=math.floor(math.sqrt(len(l2)))
+    doc_list=[]
+    while i<len(l1) and j<len(l2):
+        if(l1[i]==l2[j]):
+            print("Balsmad",list1[l1[i]])
+            skip3=math.floor(math.sqrt(len(list1[l1[i]])))
+            skip4=math.floor(math.sqrt(len(list2[l2[j]])))
+            k=0
+            l=0
+            while k<len(list1[i+1]) and l<len(list2[j+1]):
+                
+                if list2[j+1][l]>list1[i+1][k] and list2[j+1][l]-list1[i+1][k]-1<=space:
+                    
+                    doc_list.append(i+1)
+                    i+=1
+                    j+=1
+                    break
+                elif list2[j+1][l]<=list1[i+1][k]:
+                    if l+skip4<len(list2[j+1]) and list2[j+1][l+skip4]<=list1[i+1][k]: 
+                        l=l+skip4
+                    else:
+                        l+=1
+                elif list2[j+1][l]>list1[i+1][k]:
+                    if k+skip3<len(list1[i+1]) and list2[j+1][l]>list1[i+1][k+skip3]:
+                        k=k+skip3
+                    else:
+                        k+=1
+                
+                    
+        elif l1[i]>l2[j]:
+            if j+skip2<len(l2) and l1[i]>l2[j+skip2]:
+                j=j+skip2
+            else:
+                j+=1    
+        else:
+            if i+skip1<len(l1) and l1[i+skip1]<l2[j]:
+                i=i+skip1
+            else:    
+                i+=1                  
+    return doc_list
 
+
+def list_intersection(list1,list2):
+    if isinstance(list1, list):
+        keys1=list1
+    elif isinstance(list1,dict):
+        keys1=list(list1.keys())
+    if isinstance(list2, list):
+        keys2=list2
+    elif isinstance(list2,dict):
+        keys2=list(list2.keys())
+    set1=set(keys1)
+    set2=set(keys2)
+    intersect_set=set1.intersection(set2)
+    return list(intersect_set)
+def list_union(list1,list2):
+    if isinstance(list1, list):
+        keys1=list1
+    elif isinstance(list1,dict):
+        keys1=list(list1.keys())
+    if isinstance(list2, list):
+        keys2=list2
+    elif isinstance(list2,dict):
+        keys2=list(list2.keys())
+    set1=set(keys1)
+    set2=set(keys2)
+    union_set=set1.union(set2)
+    return list(union_set)
 def getQueryDocuments(index,query):
-    doc_list=getDocumentList(index.values())
-    defe=[1]
-    print(index["ensembl"].keys())
-    print(doc_list)
-    print(list(set(doc_list)-set(index["ensembl"].keys())))
-    #print(query)
+    totalList=getTotalDocumentList(index.values())
+    words=query.split()
+    doc_list1=[]
+    doc_list2=[]
+    not_exists=False
+    and_lists=False
+    or_lists=False
+    for i in range(len(words)):
+        if words[i][0]=="/":
+            space_between=words[i].rstrip()
+            space_between=space_between[1:]
+            space_between=int(space_between)
+            print(space_between)
+            doc_list1=spaceBetweenListings(doc_list1,doc_list2,space_between)
+            doc_list2=[]
+        elif words[i].lower()=="and":
+            and_lists=True
+        elif words[i].lower()=="or":
+            or_lists=True
+        elif words[i].lower()=="not":
+            not_exists=True
+        else:
+            text=preprocess_word(words[i])
+            if(not_exists):
+                not_exists=False
+                if len(doc_list1)==0:
+                    if text in index:
+                        doc_list1=list(set(totalList)-set(index[text].keys())) 
+                    else:
+                        doc_list1=totalList       
+                else:
+                    if text in index:
+                        doc_list2=list(set(totalList)-set(index[text].keys()))
+                    else:
+                        doc_list2=totalList
+
+            else:
+                if len(doc_list1)==0:
+                    if i+1<len(words) and (words[i+1].lower()!="and" or words[i+1].lower()!="or"):
+                        doc_list1=getDocumentPostings(index,text)
+                    else:
+                        if text in index:
+                            doc_list1=list((index[text].keys()))   
+
+                else:
+                    
+                    if i+1<len(words) and words[i+1].lower()!="and" and words[i+1].lower()!="or" and words[i+1][0]!="/":
+                        doc_list2=getDocumentPostings(index,text)
+                        text2=preprocess_word(index,words[i+1])
+                        doc_list3=getDocumentPostings(index,text2)
+                        space_between=words[i+2].rstrip()
+                        space_between=space_between[1:]
+                        space_between=int(space_between)
+                        doc_list2=spaceBetweenListings(doc_list2,doc_list3,space_between)
+                    elif i+1<len(words) and words[i+1][0]=="/":
+                        doc_list2=getDocumentPostings(index,text)
+                    else:
+                        if text in index:
+                            doc_list2= list(index[text].keys())
+                        elif and_lists:
+                            doc_list1=[]
+                        elif or_lists:
+                            or_lists=False
+
+
+        if len(doc_list1)>0 and len(doc_list2)>0:
+            if and_lists:
+                and_lists=False
+                doc_list1=list_intersection(doc_list1,doc_list2)
+                doc_list2=[]
+            elif or_lists:
+                doc_list1=list_union(doc_list1,doc_list2)
+                doc_list2=[]
+                or_lists=False    
+   
+    return doc_list1
 
 
 #store the stop word list returned from getStopWords function into stopWordList
@@ -170,8 +324,9 @@ if(stopWordList==-1):
 else:
     print("Stopword List initialized")  
 
+print("Creating Index...")
 indexing=createIndex(stopWordList)
-#print("index:",indexing)
+print("Index Created")
 
 print("Search Query Constraints")
 print("1-Queries can have AND,OR,NOT,/k operators")
@@ -180,45 +335,8 @@ print("  B-OR:used between 2 words if documents must include either or both word
 print("  C-NOT:used before a word if documents must not include this word")
 print("  D-/k:used after 2 words if documents must include both those words and at most k words can appear between them(where k>=0)")
 print("2-Maximum 3 search words")
-queries = [
-    "word1",
-    "word1 AND word2",
-    "word1 OR word2",
-    "word1 NOT word2",
-    "word1 AND NOT word2",
-    "NOT word1 AND word2",
-    "word1 OR NOT word2",
-    "NOT word1 OR word2",
-    "word1 AND word2 AND word3",
-    "word1 OR word2 OR word3",
-    "word1 NOT word2 AND word3",
-    "word1 AND word2 AND word3 AND word4",
-    "word1 word2 /3",
-    "word1 word2 /1",
-    "NOT word1 word2 /2",
-    "",  # empty
-    " ",  # whitespace only
-    "AND word1",
-    "word1 AND",
-    "word1 AND OR word2",
-    "word1 OR AND word2",
-    "NOT AND word1",
-    "word1 NOT AND word2",
-    "word1 AND NOT /3",
-    "word1 AND NOT OR word2",
-    "word1 word2 /",
-    "word1 word2 /word3",
-    "word1 word2 / 3 word3",
-    "/3 word1 word2",
-    "word1 word2 /3 /2",
-    "word1 /3 word2",
-    "word1 word2 word3 word4",
-    "word1 & word2",
-    "word1 word2",
-    "word1 NOT",
-    "word1 NOT /3",
-    "word1 NOT NOT word2"
-]
+
+
 
 while(True):
     query=input("Enter Query:")
@@ -226,5 +344,8 @@ while(True):
         print("Correct Query!")
         print("Searching...")
         documents=getQueryDocuments(indexing,query)
+        documents.sort()
+        print("Result-Set:",documents)
+        
     else:
         print("Invalid Query!")            
