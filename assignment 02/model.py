@@ -1,487 +1,330 @@
 import nltk
-from nltk.stem import PorterStemmer
+from nltk.stem import WordNetLemmatizer
 import string
 import re
 import math
+import os
+from collections import defaultdict
+import numpy as np
 
-#initialize the porter stemmer
-stemmer = PorterStemmer()
+#constant values
+ABSTRACTS_DIR = "Abstracts"
+STOPWORDS_FILE = "Stopword-List.txt"
+SIMILARITY_THRESHOLD = 0.05
 
-#returns stopwords into a list
-def getStopWords():
-    #open stopword file for reading
-    with open("Stopword-List.txt","r") as file:
-        #split the file into words
-        words=file.read().split()
-        #return list
-        return words 
-    #if error occurs in file opening    
-    return -1
-#function to pre process words from the query
+#initialize the lemmatizer
+lemmatizer = WordNetLemmatizer()
+
+#returns stopword set from file
+def get_stop_words(filepath=STOPWORDS_FILE):
+    try:
+        #open file in read mode
+        with open(filepath, "r") as file:
+            #split the words
+            words = file.read().split()
+            return set(words)
+    except FileNotFoundError:
+        #if file not found,return null
+        print(f"Error: Stopwords file not found at {filepath}")
+        return set()
+#process words read in documents
 def preprocess_word(word):
-    #lowercase all letters
+    #return none if word is empty
+    if not word:
+        return None
+    #lowercase the word
     word = word.lower()
-    #remove all punctuations in the word
+    #remove all punctuations
     word = word.translate(str.maketrans('', '', string.punctuation))
-    #initialize porter stemmer
-    stemmer = PorterStemmer()
-    #stem the word
-    stemmed_word = stemmer.stem(word)
-    #return stemmed word
-    return stemmed_word
+    if word:
+        #leematize the word according to correct vocabulary
+        lemmatized_word = lemmatizer.lemmatize(word)
+        return lemmatized_word
+    return None
 
-#function to create inverted indexings from the abstract files
-def createIndex(stopWords):
-    index={}
-    i=1
-    #loop to access file by file
-    while True:
-        #create filename
-        filename=str(i)+".txt"
+#text from a file is used in this function to create tokens
+def tokenize_and_preprocess(text, stop_words):
+    processed_tokens = []
+    #split words based on comma,space or forward slash
+    temp_words = re.split(r'[,\s/]+', text)
+    words = []
+    #access the words 1 by 1
+    for word in temp_words:
+        #check if word has hyphen
+        if '-' in word and len(word) > 1:
+             #if hyphen found,break the word further
+             parts = word.split('-')
+             #add the combined word in the temporary index after processing the word
+             combined_no_hyphen = preprocess_word(word.replace('-', ''))
+             if combined_no_hyphen: words.append(combined_no_hyphen)
+             for part in parts:
+                 #add parts of the word in the temporary index as well after processing the word and breaking the word based on hyphen
+                 processed_part = preprocess_word(part)
+                 if processed_part: words.append(processed_part)
+        #if no hyphen,add the word in the index after processing it         
+        else:
+            processed = preprocess_word(word)
+            if processed: words.append(processed)
+    #check if the words are stopwords
+    for token in words:
+        if token and token not in stop_words:
+             #only append those tokens in the index which are not stopwords
+             processed_tokens.append(token)
+    #return the final indexing of a file
+    return processed_tokens
+
+
+#function to build tf-idf inverted index
+def build_inverted_index_and_tf_df(docs_path, stop_words):
+    term_doc_freq = defaultdict(lambda: defaultdict(int))
+    doc_freq = defaultdict(int)
+    doc_tokens_map = {}
+    doc_id_map = {}
+    doc_count = 0
+
+    try:
+        #create a list of all the available files
+        filenames = sorted([f for f in os.listdir(docs_path) if f.endswith(".txt")],
+                           key=lambda x: int(os.path.splitext(x)[0]))
+    #if fliepath is worng
+    except FileNotFoundError:
+        print(f"Error: Directory not found at {docs_path}")
+        return {}, {}, {}, 0
+    #if filenames are not numeric
+    except ValueError:
+        print(f"Error: Ensure filenames in {docs_path} are numeric (e.g., 1.txt, 2.txt).")
+        return {}, {}, {}, 0
+    #loop to token and process every file
+    for filename in filenames:
+        #check is file(document) is numeric or not,skip non-numeric ones
         try:
-            #open file for reading
-            with open("Abstracts/" + filename,"r") as file:
-                #read file data into text
-                text=file.read()
-                #initialize words which will hold data from text after splitting into individual words
-                words = []
-                #Split by whitespace,comma and forward slashes
-                for word in re.split(r'[,\s/]+', text): 
-                    #check for hyphens in word 
-                    if '-' in word:
-                        #if hyphens exist store it as 1 whole word and individual words(for e.g hello-world will be stored as helloworld,hello,world 3 different indexes) 
-                        parts = word.split('-')
-                        #Combined word
-                        words.append(word.replace('-', '')) 
-                        #Separate parts 
-                        words.extend(parts)  
-                    else:
-                        #append word directly if hyphen does not exist
-                        words.append(word)
-                #loop to access words 1 by 1,apply stemmer and create index for it       
-                for j in range(len(words)):
-                    #stem word at index j
-                    stemmed_word=preprocess_word(words[j])
-                    #check if word is not a stopword
-                    if stemmed_word not in stopWords:
-                        #check if stemmed word does not already exists in index
-                        if stemmed_word not in index:
-                            #create new entry for stemmed word
-                            index[stemmed_word]={}
-                            #store its document number and its position in the document
-                            index[stemmed_word][i]=[j]
-                        #if stemmed word already exists    
-                        else:
-                            #check if document does not already exist at stemmed word in index
-                            if i not in index[stemmed_word]:
-                                #create new entry for the document
-                                index[stemmed_word][i]=[]
-                                #append the position of the stemmed word in the index at document i
-                                index[stemmed_word][i].append(j)
-                            #if document already exists    
-                            else:
-                                #append the position of the stemmed word
-                                index[stemmed_word][i].append(j)  
-        #if file not found                        
-        except FileNotFoundError:
-            #break loop
-            break
-        i+=1
-    #return the final index       
-    return index    
-#function to check if given query is valid
-def validateQuery(query):
-    # Check for empty query or whitespace-only query
-    if len(query) == 0 or query.strip() == "":
-        return False
+            doc_id = int(os.path.splitext(filename)[0])
+        except ValueError:
+            print(f"Skipping file with non-numeric name: {filename}")
+            continue
+        #keep document counts
+        doc_count += 1
+        doc_id_map[filename] = doc_id
+        filepath = os.path.join(docs_path, filename)
 
-    # Split the query string into a list of words (tokens)
-    words = query.split()
+        try:
+            #open file,read file and tokenize the text
+            with open(filepath, "r", encoding='utf-8', errors='ignore') as file:
+                text = file.read()
+                tokens = tokenize_and_preprocess(text, stop_words)
+                doc_tokens_map[doc_id] = tokens
+                #countr term frequency for every term
+                term_counts_in_doc = defaultdict(int)
+                processed_terms_in_doc = set()
+                #loop to create term frequencies for every token in the file(document) index
+                for token in tokens:
+                    term_counts_in_doc[token] += 1
+                    if token not in processed_terms_in_doc:
+                        doc_freq[token] += 1
+                        processed_terms_in_doc.add(token)
+                #loop to create index count for every term in every document
+                for term, count in term_counts_in_doc.items():
+                    term_doc_freq[term][doc_id] = count
 
-    # Initialize a counter for the number of index terms (words)
-    i = 0
-    # Iterate through each word (token) in the query
-    for j in range(len(words)):
-        # Check if it's the first word in the query
-        if j==0:
-        # The first word cannot be a boolean operator (AND, OR) or a positional operator (/)
-        # unless it is NOT
-            if words[0].lower() == "and" or words[0].lower() == "or" or words[0][0] == "/":
-                return False  # Invalid first word
+        except Exception as e:
+            print(f"Error processing file {filename}: {e}")
+    #no document was processed
+    if doc_count == 0:
+         print(f"Warning: No valid '.txt' files found or processed in '{docs_path}'.")
 
-        # If the first word is not "NOT", it's considered an index term
-            elif words[0].lower() != "not":
-                i += 1  # Increment the index term counter
-                
-        # Check if the current word is an index term (not an operator)
-        if j>0 and words[j].lower() != "and" and words[j].lower() != "or" and words[j][0] != "/" and words[j].lower() != "not":
-            #positional operator before an index term is false
-            if words[j - 1][0] == "/":
-                return False
-            # If it's not the first word, and the previous word was also an index term, it's invalid
-            if (words[j - 1].lower() != "and" and words[j - 1].lower() != "or" and words[j - 1].lower() != "not"):
-                #unless there is a positional operator after the 2 words
-                if(j+1<len(words) and words[j+1][0]=="/" and len(words[j+1])>=2 and words[j+1][1].isdigit()):
-                    i+=1
-                    continue
-                else:
-                    return False  # Consecutive index terms (without operators) are invalid
-            i += 1  # Increment the index term counter
+    print(f"Processed {doc_count} documents.")
+    #return tf-idf,tf,how many tokens a document has and total number of documents
+    return dict(term_doc_freq), dict(doc_freq), dict(doc_tokens_map), doc_count
 
-        # Check if the current word is a boolean operator (AND, OR, NOT)
-        if words[j].lower() == "and" or words[j].lower() == "or":
-            # Check if the next word is also an operator (invalid)
-            if j + 1 < len(words) and (words[j + 1].lower() == "and" or words[j + 1].lower() == "or" or words[j + 1][0] == "/"):
-                return False  # Consecutive operators are invalid
+#calculate term frequency
+def calculate_tf(term, doc_id, term_doc_freq, doc_tokens_map):
+    return term_doc_freq.get(term, {}).get(doc_id, 0)
+#calculate inverse document frequency
+def calculate_idf(term, doc_freq, num_docs):
+    df = doc_freq.get(term, 0)
+    if df == 0 or num_docs == 0:
+        return 0
+    return math.log(num_docs / (df + 1)) + 1
+#calculate tf-idf
+def calculate_tfidf(tf, idf):
+    return tf * idf
+#build document vectors
+def build_document_vectors(term_doc_freq, doc_freq, doc_tokens_map, num_docs):
+    doc_vectors = defaultdict(dict)
+    # Create a set of all unique terms encountered in the corpus (the vocabulary)
+    vocabulary = set(term_doc_freq.keys())
 
-            # Check if the operator is the last word in the query (invalid)
-            if j + 1 >= len(words):
-                return False  # Operator at the end is invalid
-        # check to see if word is NOT operator
-        if(words[j].lower()=="not"):
-            #if before NOT operator is not AND or OR operator,return False
-            if j-1>=0 and (words[j-1].lower()!="and" and words[j-1].lower()!="or"):
-                return False
-            #if NOT operator exists as last term in the query,return false
-            if j + 1 >= len(words):
-                return False
-            #if NOT has another operator after it,return false
-            elif words[j+1].lower()=="and" or words[j + 1].lower() == "or" or words[j + 1][0] == "/" or words[j+1].lower()=="not":
-                return False    
-        # Check if the second word is a positional operator (invalid)
-        if j == 1 and words[j][0] == "/":
-            return False  # Positional operator as the second word is invalid
+    print("Building document vectors...")
+    doc_ids = list(doc_tokens_map.keys())
 
-        # Check if the current word is a positional operator (/k) and k is missing
-        if j >= 2 and words[j][0] == "/" and not len(words[j]) > 1:
-            return False  # Positional operator without a number is invalid
+    # Pre-calculate IDF values for all terms in the vocabulary for efficiency
+    idf_map = {term: calculate_idf(term, doc_freq, num_docs) for term in vocabulary}
 
-        # Check if the positional operator (/k) is preceded by operators (invalid)
-        elif j >= 2 and words[j][0] == "/" and (words[j - 1].lower() == "and" or
-                                               words[j - 1].lower() == "or" or words[j - 1][0] == "/" or words[j - 1].lower() == "not" or
-                                               words[j - 2].lower() == "and" or words[j - 2].lower() == "or" or words[j - 2][0] == "/" or 
-                                               words[j - 2].lower() == "not" or (j>=3 and words[j-3].lower()=="not")):
-            return False  # Positional operator preceded by operators is invalid
+    # Iterate through each document ID to build its vector
+    for doc_id in doc_ids:
+        # Get raw term frequencies for terms present only in the current document
+        doc_tf_map = {term: term_doc_freq.get(term,{}).get(doc_id, 0)
+                          for term in doc_tokens_map[doc_id] if term in vocabulary}
 
-        # Check if the positional operator (/k) is followed by a non-digit (invalid)
-        elif j >= 2 and words[j][0] == "/" and not words[j][1].isdigit():
-            return False  # Positional operator with non-digit distance is invalid
-    #if number of terms greater than 3,return false
-    if i > 3:
-            return False
+        vector_length_sq = 0.0 # Initialize for calculating vector magnitude
 
-    # If all checks pass, the query is valid
-    return True
+        # Calculate TF-IDF for each term in the current document
+        for term, tf_raw in doc_tf_map.items():
+            tf = tf_raw # Using raw term frequency
+            # Retrieve the pre-calculated IDF for the term
+            idf = idf_map.get(term, 0)
+            # Calculate the TF-IDF score for this term in this document
+            tfidf = calculate_tfidf(tf, idf)
 
-#function to get all distinct document numbers in a list(used to index term preceeded by a NOT operator)
-#receives all the values from the index dictionary
-def getTotalDocumentList(abc):
-    doc_list = []
-    #loop to traverse over every dictionary value (postings lists of a term)
-    for inner in abc:
-        #loop to traverse over every key in a single value item (document IDs the term exists in)
-        for key in inner.keys():
-            #if key does not already exists in total document list,add it
-            if key not in doc_list:
-                doc_list.append(key)            
-    return doc_list
+            if tfidf > 0:
+                # Store the non-zero TF-IDF weight in the document's vector 
+                doc_vectors[doc_id][term] = tfidf
+                # Accumulate the square of the weight for vector length calculation
+                vector_length_sq += tfidf ** 2
 
-#function to get all postings including the postional index of a query term
-def getDocumentPostings(index,stemmed_word):
-    #if term exists in index,return its postings
-    if stemmed_word in index:
-        return index[stemmed_word]
-    #if it does not exist,return empty list
-    return []    
+        # Calculate the magnitude (Euclidean length) of the document vector
+        magnitude = math.sqrt(vector_length_sq)
+        # Normalize the document vector if its magnitude is greater than zero
+        if magnitude > 0:
+            # Divide each TF-IDF weight by the vector magnitude
+            for term in doc_vectors[doc_id]:
+                doc_vectors[doc_id][term] /= magnitude
 
-#function to get document list where 2 words are separated by a specified space in any documents (for e.g word1 word2 /5)
-def spaceBetweenListings(list1,list2,space):
-    #create 2 lists to store all keys from the document postings
-    l1=list(list1.keys())
-    l2=list(list2.keys())
-    
-    i=0
-    j=0
-    #create skip pointers for possible skips over documents
-    skip1=math.floor(math.sqrt(len(l1)))
-    skip2=math.floor(math.sqrt(len(l2)))
-    #initialize empty document list
-    doc_list=[]
-    #loop to traverse both key lists until any is finished
-    while i<len(l1) and j<len(l2):
-        #check if both lists have a common document
-        if(l1[i]==l2[j]):
-            #create skips for possible skips over positional indexes
-            skip3=math.floor(math.sqrt(len(list1[l1[i]])))
-            skip4=math.floor(math.sqrt(len(list2[l2[j]])))
-            k=0
-            l=0
-            #loop to traverse the postional indexes of the terms in the same document
-            while k<len(list1[l1[i]]) and l<len(list2[l2[j]]):
-                #check if the distance between the terms is less than or equal to the specified space
-                if abs(list2[l2[j]][l]-list1[l1[i]][k])-1<=space:
-                    #include the document in document list 
-                    doc_list.append(l1[i])
-                    break
-                #check to see if document ID of list 2 is less than or equal to than document ID of list 1
-                elif list2[l2[j]][l]<=list1[l1[i]][k]:
-                    #check to see a skip is possible in list 2
-                    if l+skip4<len(list2[l2[j]]) and list2[l2[j]][l+skip4]<=list1[l1[i]][k]:
-                        
-                        l=l+skip4
-                    #if skip not possible increment 1    
-                    else:
-                        l+=1
-                #check to see if document ID of list 1 is less than document ID of list 2        
-                elif list2[l2[j]][l]>list1[l1[i]][k]:
-                    #check to see if a skip is possible in list 1
-                    if k+skip3<len(list1[l1[i]]) and list2[l2[j]][l]>list1[l1[i]][k+skip3]:
-                        k=k+skip3
-                    #if skip not possible increment 1    
-                    else:
-                        k+=1
-            #inner loop ends,increment i and j to check next document in both document lists
-            i+=1
-            j+=1    
-        #check to see if document ID of list1 is greater than document ID of list2            
-        elif l1[i]>l2[j]:
-            #check to see if l2 can skip over a few documents(if the skip element is less than the l1 document ID)
-            if j+skip2<len(l2) and l1[i]>l2[j+skip2]:
-                j=j+skip2
-            #if skip not possible,increment 1
-            else:
-                j+=1    
-        #no condition true,means l1 document ID is less than l2 document ID        
-        else:
-            #check to see if l1 can skip over a few documents(if the skip element is less than the l2 document ID)
-            if i+skip1<len(l1) and l1[i+skip1]<l2[j]:
-                i=i+skip1
-            #if skip not possible,increment 1    
-            else:    
-                i+=1                 
-                 
-    return doc_list
+    print("Document vectors built.")
+    # Return the dictionary of normalized document vectors, the vocabulary, and the IDF map
+    return dict(doc_vectors), vocabulary, idf_map
 
-#function to handle intersection(AND operator)
-def list_intersection(list1,list2):
-    #check to see if list1 is list or dict and get keys(document ID the index term appears in)
-    if isinstance(list1, list):
-        keys1=list1
-    elif isinstance(list1,dict):
-        keys1=list(list1.keys())
-    #check to see if list2 is list or dict and get keys(document ID the index term appears in)  
-    if isinstance(list2, list):
-        keys2=list2
-    elif isinstance(list2,dict):
-        keys2=list(list2.keys())
-    #convert both document ID lists to sets for intersection
-    set1=set(keys1)
-    set2=set(keys2)
-    #intersect the 2 sets
-    intersect_set=set1.intersection(set2)
-    #convert the intersect set to a list and return
-    return list(intersect_set)
+#check vector similarity
+def build_query_vector(query_tokens, vocabulary, idf_map, num_docs):
+    query_vector = defaultdict(float)
+    term_counts_in_query = defaultdict(int)
+    query_token_count = len(query_tokens)
 
-#function to handle union(OR operator)
-def list_union(list1,list2):
-    #check to see if list1 is list or dict and get keys(document ID the index term appears in)   
-    if isinstance(list1, list):
-        keys1=list1
-    elif isinstance(list1,dict):
-        keys1=list(list1.keys())
-    #check to see if list2 is list or dict and get keys(document ID the index term appears in)  
-    if isinstance(list2, list):
-        keys2=list2
-    elif isinstance(list2,dict):
-        keys2=list(list2.keys())
-    #convert both document ID lists to sets for union
-    set1=set(keys1)
-    set2=set(keys2)
-    #union the lists
-    union_set=set1.union(set2)
-    #convert the union set to a list and return
-    return list(union_set)
+    if query_token_count == 0:
+        return {}
 
-#function that takes query and returns the relevant documents needed
-def getQueryDocuments(index,query):
-    #get all document IDs in the indexing(to solve NOT operator)
-    totalList=getTotalDocumentList(index.values())
-    #split the query to words
-    words=query.split()
-    #initialize 2 document lists for operator processing between 2 Index terms
-    doc_list1=[]
-    doc_list2=[]
-    #initialize boolean variables to identify which operator to perform 
-    not_exists=False
-    and_lists=False
-    or_lists=False
-    #loop to traverse each query term
-    for i in range(len(words)):
-        #check if query term is positional operator
-        #since validate query checks there are 2 terms before postional operator so this condition will not be 
-        #true until 2 words are traversed and both doc list1 and doc list2 are populated
-        if words[i][0]=="/":
-            #get the space allowed between the 2 terms
-            space_between=words[i].rstrip()
-            space_between=space_between[1:]
-            space_between=int(space_between)
-            #call the function to find documents and store in doc_list1
-            doc_list1=spaceBetweenListings(doc_list1,doc_list2,space_between)
-            #empty doc list2
-            doc_list2=[]
-        #if query term is AND operator,make and_list bool variable true
-        #will identify that 2 query terms have to be intersected(AND)     
-        elif words[i].lower()=="and":
-            and_lists=True
-        #if query term is OR operator,make or_list bool variable true
-        #will identify that 2 query terms have to be union(OR)     
-        elif words[i].lower()=="or":
-            or_lists=True
-        #if query term is NOT operator,make not_exists bool variable true
-        #will identify if a an index term in query will need NOT applied or not
-        elif words[i].lower()=="not":
-            not_exists=True
-        #if all false,means it is an index term    
-        else:
-            #process the word(lowercase,remove punctuations,stemming)
-            text=preprocess_word(words[i])
-            #check if term has NOT before it
-            if(not_exists):
-                #if NOT exists,change it to false for next possible term
-                not_exists=False
-                #check if doc list1 is empty(this is the first term in query)
-                if len(doc_list1)==0:
-                    #if term exists in index
-                    if text in index:
-                        #set doc list1 to total document list and remove all document IDs the term is found in(NOT operator) 
-                        doc_list1=list(set(totalList)-set(index[text].keys())) 
-                    #term does not exist in index    
-                    else:
-                        #set doc list1 to total document list(NOT operator)
-                        doc_list1=totalList       
-                #doc list1 is not empty(this term is 2nd or later term)
-                else:
-                    #if term exists in index
-                    if text in index:
-                        #set doc list2 to total document list and remove all document IDs the term is found in(NOT operator) 
-                        doc_list2=list(set(totalList)-set(index[text].keys()))
-                    #term does not exist in index
-                    else:
-                        #set doc list1 to total document list(NOT operator)
-                        doc_list2=totalList
-            #NOT operator is not applied
-            else:
-                #check if doc list1 is empty(this is the first term in query)
-                if len(doc_list1)==0:
-                    #check to see if next word is another index term(possible /k query)
-                    if i+1<len(words) and (words[i+1].lower()!="and" or words[i+1].lower()!="or"):
-                        #set doc list1 to document postings list of the index term
-                        doc_list1=getDocumentPostings(index,text)
-                    #query ended or AND or OR exists
-                    else:
-                        #if term exists in index
-                        if text in index:
-                            #set doc list1 to the keys(document IDs) of the term's postings list
-                            doc_list1=list((index[text].keys()))   
-                #doc list1 is not empty(this term is 2nd or later term)
-                else:
-                    #check to see if next term is another index term(possible /k operator)
-                    #example query (word1 AND word2 word3 /4,word1 AND word2 can not be solved before)
-                    if i+1<len(words) and words[i+1].lower()!="and" and words[i+1].lower()!="or" and words[i+1][0]!="/":
-                        #get document postings of the term
-                        doc_list2=getDocumentPostings(index,text)
-                        #process the next term
-                        text2=preprocess_word(index,words[i+1])
-                        #get document postings of the next term
-                        doc_list3=getDocumentPostings(index,text2)
-                        #get the allowed space
-                        space_between=words[i+2].rstrip()
-                        space_between=space_between[1:]
-                        space_between=int(space_between)
-                        #get the relevant documents 
-                        doc_list2=spaceBetweenListings(doc_list2,doc_list3,space_between)
-                        #increment the loop counter so this query is not accessed again
-                        i+=2
-                    #check to see if next operator is positional operator    
-                    elif i+1<len(words) and words[i+1][0]=="/":
-                        #get document postings of the term
-                        doc_list2=getDocumentPostings(index,text)
-                    #AND or OR operator exists
-                    else:
-                        #check if term exists in index
-                        if text in index:
-                            #get document IDs of the term
-                            doc_list2= list(index[text].keys())
-                        #if does not exist,check if the operator to be applied between doc list1 and doc list2 is AND or OR
-                        #if operator is AND
-                        elif and_lists:
-                            #empty doc list1 since no common documents exist
-                            doc_list1=[]
-                        #if operator is OR    
-                        elif or_lists:
-                            #set bool to false,doc list1 remains same as before,doc list2 remains empty
-                            or_lists=False
+    # Calculate raw term frequencies for each term within the query itself
+    for token in query_tokens:
+        term_counts_in_query[token] += 1
 
-        #check if doc list1 and doc list2 are non-empty
-        if len(doc_list1)>0 and len(doc_list2)>0:
-            #check if operator is AND
-            if and_lists:
-                #false the boolean variable
-                and_lists=False
-                #intersect the 2 lists
-                doc_list1=list_intersection(doc_list1,doc_list2)
-                #empty doc list2 to hold postings of next possible term
-                doc_list2=[]
-            #check if operator is OR    
-            elif or_lists:
-                #union the 2 lists
-                doc_list1=list_union(doc_list1,doc_list2)
-                #empty doc list2 to hold postings of next possible term
-                doc_list2=[]
-                #false the boolean variable
-                or_lists=False    
-   #return the final document lists containing needed document IDS
-    return doc_list1
+    vector_length_sq = 0.0 # Initialize for calculating query vector magnitude
+    # Calculate TF-IDF for each term in the query
+    for term, count in term_counts_in_query.items():
+        # Only consider terms that are part of the corpus vocabulary
+        if term in vocabulary:
+            # Use raw frequency count as TF for the query term
+            query_tf = count
+            # Get the pre-calculated IDF value 
+            idf = idf_map.get(term, 0)
+            # Calculate the TF-IDF weight for the query term
+            tfidf = calculate_tfidf(query_tf, idf)
+
+            if tfidf > 0:
+                # Store the non-zero weight in the query vector 
+                query_vector[term] = tfidf
+                # Accumulate the square of the weight for vector length calculation
+                vector_length_sq += tfidf ** 2
+
+    # Calculate the magnitude of the query vector
+    magnitude = math.sqrt(vector_length_sq)
+    # Normalize the query vector if its magnitude is greater than zero
+    if magnitude > 0:
+        # Divide each TF-IDF weight by the vector magnitude
+        for term in query_vector:
+            query_vector[term] /= magnitude
+
+    # Return the normalized query vector as a standard dictionary
+    return dict(query_vector)
 
 
-#store the stop word list returned from getStopWords function into stopWordList
-stopWordList=getStopWords()
+def cosine_similarity(vec1, vec2):
+    # ensure vec1 is the shorter vector for faster intersection
+    if len(vec1) > len(vec2):
+        vec1, vec2 = vec2, vec1
 
-#check if stopWordList contains error or not
-if(stopWordList==-1):
-    print("Failed to retreive stopwords")
-else:
-    print("Stopword List initialized")  
-
-print("Creating Index...")
-#create the indexings of all documents in Abstracts folder
-indexing=createIndex(stopWordList)
-print("Index Created")
-
-
-print("Search Query Constraints")
-print("1-Queries can have AND,OR,NOT,/k operators")
-print("  A-AND:used between 2 words if documents must include both words")
-print("  B-OR:used between 2 words if documents must include either or both words")
-print("  C-NOT:used before a word if documents must not include this word")
-print("  D-/k:used after 2 words if documents must include both those words and at most k words can appear between them(where k>=0)")
-print("2-Maximum 3 search words")
+    # Find the set of terms that are common to both vectors
+    common_terms = set(vec1.keys()) & set(vec2.keys())
+    # Calculate the dot product by summing the product of weights for common terms
+   
+    dot_product = sum(vec1[term] * vec2[term] for term in common_terms)
+    # Clamp the result between -1.0 and 1.0 to handle potential floating point inaccuracies
+    return max(-1.0, min(1.0, dot_product))
 
 
-#loop to keep asking for search queries
-while(True):
-    #input query
-    query=input("Enter Query:")
-    #validate the query
-    if(validateQuery(query)):
-        print("Correct Query!")
-        print("Searching...")
-        #get relevant documents
-        documents=getQueryDocuments(indexing,query)
-        #sort the document lists
-        documents.sort()
-        #print the document list
-        print("Result-Set:",documents)
-    #if query validation is false    
+#process user query
+def process_vsm_query(query, doc_vectors, vocabulary, idf_map, num_docs, stop_words, threshold):
+    # Preprocess the raw query string into a list of relevant tokens (lemmas)
+    query_tokens = tokenize_and_preprocess(query, stop_words)
+    if not query_tokens:
+        print("Query contains only stopwords or is empty after preprocessing.")
+        return []
+
+    # Build the normalized TF-IDF vector representation for the processed query
+    query_vector = build_query_vector(query_tokens, vocabulary, idf_map, num_docs)
+    if not query_vector:
+         print("Query vector could not be built (e.g., all query terms are out of vocabulary).")
+         return []
+
+    results = []
+    # Iterate through all pre-calculated document vectors
+    for doc_id, doc_vec in doc_vectors.items():
+        # Ensure the document vector is not empty
+        if doc_vec:
+            # Calculate the cosine similarity between the query vector and the current document vector
+            similarity = cosine_similarity(query_vector, doc_vec)
+            # Keep the result only if the similarity meets or exceeds the threshold
+            if similarity >= threshold:
+                # Store the document ID and its similarity score
+                results.append((doc_id, similarity))
+
+    # Sort the results list based on document ID in ascending order
+    results.sort(key=lambda x: x[0], reverse=False)
+    # Return the filtered and sorted list of (doc_id, score) tuples
+    return results
+
+#main function
+if __name__ == "__main__":
+    # Load the set of stopwords from the specified file
+    stop_word_set = get_stop_words(STOPWORDS_FILE)
+    if not stop_word_set:
+        print("Proceeding without stopwords.")
+
+    print("Initializing VSM with Lemmatization...")
+    # Build the core data structures: TF per doc, DF per term, and tokens per doc
+    term_doc_freq, doc_freq, doc_tokens_map, num_docs = build_inverted_index_and_tf_df(ABSTRACTS_DIR, stop_word_set)
+
+    # Exit if no documents were successfully processed
+    if num_docs == 0:
+        print("No documents found. Exiting.")
     else:
-        print("Invalid Query!")            
+        # Pre-calculate the normalized TF-IDF vectors for all documents in the corpus
+        doc_vectors, vocabulary, idf_map = build_document_vectors(term_doc_freq, doc_freq, doc_tokens_map, num_docs)
+        print(f"VSM Initialized. Vocabulary size: {len(vocabulary)}, Documents: {num_docs}")
+        print("\nEnter your search query (e.g., 'information retrieval'). Type 'exit' to quit.")
+
+        # Start the interactive loop to accept user queries
+        while True:
+            # Prompt the user for a query and remove leading/trailing whitespace
+            query = input("Enter Query: ").strip()
+            # Check if the user wants to exit the loop
+            if query.lower() == 'exit':
+                break
+            # Skip if the user just pressed Enter without typing anything
+            if not query:
+                continue
+
+            print("Searching...")
+            # Process the query using the VSM: calculate query vector, compute similarities, filter, and sort
+            ranked_docs = process_vsm_query(query, doc_vectors, vocabulary, idf_map, num_docs, stop_word_set, SIMILARITY_THRESHOLD)
+
+            # Check if the search returned any relevant documents above the threshold
+            if ranked_docs:
+                print(f"\nFound {len(ranked_docs)} relevant documents (score >= {SIMILARITY_THRESHOLD}):")
+                # Iterate through the sorted list of (doc_id, score) tuples
+                for doc_id, score in ranked_docs:
+                    # Print each relevant document ID and its calculated similarity score
+                    print(f"  Document ID: {doc_id}, Score: {score:.4f}")
+            else:
+                # Inform the user if no documents met the similarity criteria
+                print("No relevant documents found matching the criteria.")
+            print("-" * 20) # Print a separator for readability
